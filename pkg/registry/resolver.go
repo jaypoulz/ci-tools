@@ -334,7 +334,7 @@ func (r *registry) processStep(step *api.TestStep, seen sets.Set[string], stack 
 		ret.Dependencies = deps
 	}
 
-	if ret.DNSConfig != nil {
+	if ret.DNSConfig == nil {
 		ret.DNSConfig = stack.resolveDNS(ret.DNSConfig)
 	}
 	return ret, errs

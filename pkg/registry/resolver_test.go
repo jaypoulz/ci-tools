@@ -1163,6 +1163,152 @@ func TestResolveParameters(t *testing.T) {
 	}
 }
 
+func TestResolveDNSConfig(t *testing.T) {
+	stringPtr := func(s string) *string { return &s }
+	for _, tc := range []struct {
+		name               string
+		refs               ReferenceByName
+		chains             ChainByName
+		workflows          WorkflowByName
+		test               api.MultiStageTestConfiguration
+		expectedDNSConfigs []*api.StepDNSConfig
+		wantErr            error
+	}{
+		{
+			name: "DNS flows from workflow to a test",
+			workflows: WorkflowByName{"dns-workflow": api.MultiStageTestConfiguration{
+				DNSConfig: &api.StepDNSConfig{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}},
+			}},
+			test: api.MultiStageTestConfiguration{
+				Workflow: stringPtr("dns-workflow"),
+				Test:     []api.TestStep{{LiteralTestStep: &api.LiteralTestStep{As: "step"}}},
+			},
+			expectedDNSConfigs: []*api.StepDNSConfig{{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}}},
+		},
+		{
+			name: "DNS flows from test to a step",
+			workflows: WorkflowByName{"dns-workflow": api.MultiStageTestConfiguration{
+				DNSConfig: &api.StepDNSConfig{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}},
+			}},
+			test: api.MultiStageTestConfiguration{
+				Workflow:  stringPtr("dns-workflow"),
+				Test:      []api.TestStep{{LiteralTestStep: &api.LiteralTestStep{As: "step"}}},
+				DNSConfig: &api.StepDNSConfig{Nameservers: []string{"test-ns"}, Searches: []string{"test-search"}},
+			},
+			expectedDNSConfigs: []*api.StepDNSConfig{{Nameservers: []string{"test-ns"}, Searches: []string{"test-search"}}},
+		},
+		{
+			name: "An empty DNS config on a test is not overridden",
+			workflows: WorkflowByName{"dns-workflow": api.MultiStageTestConfiguration{
+				DNSConfig: &api.StepDNSConfig{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}},
+			}},
+			test: api.MultiStageTestConfiguration{
+				Workflow:  stringPtr("dns-workflow"),
+				Test:      []api.TestStep{{LiteralTestStep: &api.LiteralTestStep{As: "step", DNSConfig: &api.StepDNSConfig{}}}},
+				DNSConfig: &api.StepDNSConfig{Nameservers: []string{"test-ns"}, Searches: []string{"test-search"}},
+			},
+			expectedDNSConfigs: []*api.StepDNSConfig{{}},
+		},
+		{
+			name: "DNS flows from workflow to a nested reference",
+			workflows: WorkflowByName{"dns-workflow": api.MultiStageTestConfiguration{
+				DNSConfig: &api.StepDNSConfig{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}},
+			}},
+			chains: ChainByName{
+				"chain-1": api.RegistryChain{
+					As:    "chain-1",
+					Steps: []api.TestStep{{Chain: stringPtr("chain-2")}},
+				},
+				"chain-2": api.RegistryChain{
+					As:    "chain-2",
+					Steps: []api.TestStep{{Reference: stringPtr("ref-1")}},
+				},
+			},
+			refs: ReferenceByName{
+				"ref-1": api.LiteralTestStep{As: "ref-1"},
+			},
+			test: api.MultiStageTestConfiguration{
+				Workflow: stringPtr("dns-workflow"),
+				Pre:      []api.TestStep{{Chain: stringPtr("chain-1")}},
+				Test:     []api.TestStep{{LiteralTestStep: &api.LiteralTestStep{As: "step"}}},
+			},
+			expectedDNSConfigs: []*api.StepDNSConfig{
+				{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}},
+				{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}},
+			},
+		},
+		{
+			name: "DNS flows from test to a nested reference",
+			workflows: WorkflowByName{"dns-workflow": api.MultiStageTestConfiguration{
+				DNSConfig: &api.StepDNSConfig{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}},
+			}},
+			chains: ChainByName{
+				"chain-1": api.RegistryChain{
+					As:    "chain-1",
+					Steps: []api.TestStep{{Chain: stringPtr("chain-2")}},
+				},
+				"chain-2": api.RegistryChain{
+					As:    "chain-2",
+					Steps: []api.TestStep{{Reference: stringPtr("ref-1")}},
+				},
+			},
+			refs: ReferenceByName{
+				"ref-1": api.LiteralTestStep{As: "ref-1"},
+			},
+			test: api.MultiStageTestConfiguration{
+				Workflow:  stringPtr("dns-workflow"),
+				Pre:       []api.TestStep{{Chain: stringPtr("chain-1")}},
+				Test:      []api.TestStep{{LiteralTestStep: &api.LiteralTestStep{As: "step"}}},
+				DNSConfig: &api.StepDNSConfig{Nameservers: []string{"test-ns"}, Searches: []string{"test-search"}},
+			},
+			expectedDNSConfigs: []*api.StepDNSConfig{
+				{Nameservers: []string{"test-ns"}, Searches: []string{"test-search"}},
+				{Nameservers: []string{"test-ns"}, Searches: []string{"test-search"}},
+			},
+		},
+		{
+			name: "A nested reference keep its own DNS",
+			workflows: WorkflowByName{"dns-workflow": api.MultiStageTestConfiguration{
+				DNSConfig: &api.StepDNSConfig{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}},
+			}},
+			chains: ChainByName{
+				"chain-1": api.RegistryChain{
+					As:    "chain-1",
+					Steps: []api.TestStep{{Chain: stringPtr("chain-2")}},
+				},
+				"chain-2": api.RegistryChain{
+					As:    "chain-2",
+					Steps: []api.TestStep{{Reference: stringPtr("ref-1")}},
+				},
+			},
+			refs: ReferenceByName{
+				"ref-1": api.LiteralTestStep{As: "ref-1", DNSConfig: &api.StepDNSConfig{Nameservers: []string{"ref-1-ns"}, Searches: []string{"ref-1-search"}}},
+			},
+			test: api.MultiStageTestConfiguration{
+				Workflow: stringPtr("dns-workflow"),
+				Test:     []api.TestStep{{LiteralTestStep: &api.LiteralTestStep{As: "step"}}},
+				Post:     []api.TestStep{{Chain: stringPtr("chain-1")}},
+			},
+			expectedDNSConfigs: []*api.StepDNSConfig{
+				{Nameservers: []string{"workflow-ns"}, Searches: []string{"workflow-search"}},
+				{Nameservers: []string{"ref-1-ns"}, Searches: []string{"ref-1-search"}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ret, err := NewResolver(tc.refs, tc.chains, tc.workflows, ObserverByName{}).Resolve("test", tc.test)
+			var dnsConfigs []*api.StepDNSConfig
+			for _, l := range [][]api.LiteralTestStep{ret.Pre, ret.Test, ret.Post} {
+				for _, s := range l {
+					dnsConfigs = append(dnsConfigs, s.DNSConfig)
+				}
+			}
+			testhelper.Diff(t, "error", err, tc.wantErr, testhelper.EquateErrorMessage)
+			testhelper.Diff(t, "dns config", dnsConfigs, tc.expectedDNSConfigs)
+		})
+	}
+}
+
 func TestResolveLeases(t *testing.T) {
 	ref0 := "ref0"
 	chain0 := "chain0"
